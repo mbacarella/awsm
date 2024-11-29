@@ -37,6 +37,7 @@ dune rules to access desired APIs.
 ```
 cd your-existing-project
 git clone git@github.com:solvuu/awsm awsm
+cd awsm
 make install-deps
 eval $(opam env)
 ```
@@ -78,7 +79,7 @@ Write some code.
 
 Note that instead of functors, `awsm` uses [lightweight higher-kinded
 polymorphism](https://www.cl.cam.ac.uk/~jdy22/papers/lightweight-higher-kinded-polymorphism.pdf)
-to generalize over the concurrency libraries.
+to generalize over concurrency libraries (Awsm and Lwt).
 
 ```ocaml
 (* awsm_ec2_describe_instances.ml *)
@@ -144,7 +145,7 @@ let () =
 ;;
 ```
 
-Make sure to populate your `~/.aws/config` and `~/.aws/credentials` file in the usual way.
+Next, make sure to populate your `~/.aws/config` and `~/.aws/credentials` file in the usual way.
 
 Finally, run `dune exec`
 
@@ -152,7 +153,7 @@ Finally, run `dune exec`
 dune exec ./awsm_ec2_describe_instances.exe
 ```
 
-You should see an s-expression list of all compute instances you have in EC2.
+You should see a sexp output of all compute instances you have in EC2.
 
 
 ## Documentation
