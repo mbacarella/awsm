@@ -1,13 +1,12 @@
-[![CircleCI](https://circleci.com/gh/solvuu-inc/awsm/tree/master.svg?style=svg&circle-token=6e955177fec6a2e8098b21dc8decd7928b421555)](https://circleci.com/gh/solvuu-inc/awsm/tree/master)
-
 # awsm - OCaml AWS client
 
 Pure OCaml client for AWS. Code is auto-generated for all services
 based on the API declared in
 [botocore](https://github.com/boto/botocore/). Higher level functions
 are often implemented on top of this base, e.g. to support multi-part
-uploads to S3. Sub-libraries are provided for blocking, Async, and Lwt
-versions of all code.
+uploads to S3.
+
+Sub-libraries are provided for Async and Lwt versions of all code.
 
 ## Table of Contents
 
@@ -22,78 +21,138 @@ versions of all code.
 
 ## Features
 
-| Services   | unix package  | async package  | lwt package  |
-| ---------- | ------------- | -------------- | ------------ |
-| [Amazon Athena](https://aws.amazon.com/athena) ([doc](https://docs.aws.amazon.com/athena))         | No | Yes | No |
-| [Amazon Cognito](https://aws.amazon.com/cognito) ([doc](https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-integrating-user-pools-with-identity-pools.html)) | No | Yes | No |
-| [Amazon EC2](https://aws.amazon.com/ec2) ([doc](https://docs.aws.amazon.com/ec2))                  | No | Yes | No |
-| [Amazon ECR](https://aws.amazon.com/ecr) ([doc](https://docs.aws.amazon.com/ecr))                  | No | Yes | No |
-| [Amazon Glue](https://aws.amazon.com/glue) ([doc](https://docs.aws.amazon.com/glue))               | No | Yes | No |
-| [Amazon IAM](https://aws.amazon.com/iam) ([doc](https://docs.aws.amazon.com/iam))                  | No | Yes | No |
-| [Amazon S3](https://aws.amazon.com/s3) ([doc](https://docs.aws.amazon.com/s3))                     | No | Yes | No |
-| [Amazon SQS](https://aws.amazon.com/sqs) ([doc](https://docs.aws.amazon.com/sqs))                  | No | Yes | No |
-| Cognito SRP | No | Yes | No |
-| Amazon STS ([doc](https://docs.aws.amazon.com/STS/latest/APIReference)) | No | Yes | No |
-
+Nearly all of AWS's 300 APIs are supported. Async and Lwt concurrency interfaces are
+provided. There is additionally a command-line tool for all APIs composed using Core.Command.
 
 ## Getting started
 
 ### Install and build with local OPAM switch and lock file
 
-Run the following commands to install a local OPAM switch based on OCaml 4.11.2 and install all package dependencies via OPAM.
-(Note that after running make we must also configure the local OPAM environment.)
+The library is massive and not currently released to OPAM to avoid overwhelming the package
+repository.
+
+To use awsm in your project, we recommend cloning it into a sub-directory and using
+dune rules to access desired APIs.
 
 ```
+cd your-existing-project
+git clone git@github.com:solvuu/awsm awsm
 make install-deps
 eval $(opam env)
 ```
 
-To actually build the project you are advised to lift system restrictions on stack size,
-because otherwise some files will fail to build due to stack overflows. On a modern Linux
-system you can wrap the invocation of `make` under `prlimit`:
+If you get stack overflow errors, you will need to increase stack size.
+Some auto-generated modules are enormous and overwhelm the OCaml compiler.
 
 ```
-prlimit --stack=unlimited make
+prlimit --stack=unlimited dune ...
 ```
 
 ### Examples
 
-Here is a short example where we use the S3 API to list the objects of the
-provided bucket (see [amazon API](https://docs.aws.amazon.com/cli/latest/reference/s3api/list-buckets.html)).
+See the [examples](./examples) directory for some examples.
 
-```ocaml
-open Awsm_async
-open! Import
-open IO
-module S3 = Awsm_s3.Make (IO) (Http)
+In this README we will construct an example that simply lists all servers in EC2.
 
-let pr = Caml.print_endline
+Make yourself a directory in this repo.
 
-let suite_main bucket () =
-  Cfg.get () >>= fun cfg ->
-  S3.listBuckets cfg >>= fun _ ->
-  S3.listObjects cfg (S3.ListObjectsRequest.make ~bucket ()) >>= function
-  | #S3.listObjects_error -> failwith "list objects error"
-  | `Ok response ->
-     Option.iter response.S3.ListObjectsOutput.name ~f:pr ;
-     let contents =
-       Option.value ~default:[] response.S3.ListObjectsOutput.contents
-     in
-     let on_object oo = Option.iter (oo.S3.Object.key :> string option) ~f:pr in
-     List.iter contents ~f:on_object ;
-     return ()
-
-let suite_command =
-  Command.async_spec ~summary:"Test script"
-    Command.Spec.(empty +> anon ("bucket" %: string))
-    suite_main
-
-let () =
-  Command.group ~summary:"Awsm test app" [("test-suite", suite_command)]
-  |> Command.run
+```shell
+mkdir ec2-describe-instances
+cd ec2-describe-instances
 ```
 
-More examples are available in the [app directory](./app).
+Set set up your dune file.
+
+```dune
+; dune
+(executable
+ (name awsm_ec2_describe_instances)
+ (libraries awsm-ec2-async core_unix.command_unix)
+ (flags
+  (:standard -open Core -open Async))
+ (preprocess
+  (pps ppx_jane)))
+```
+
+Write some code.
+
+Note that instead of functors, `awsm` uses [lightweight higher-kinded
+polymorphism](https://www.cl.cam.ac.uk/~jdy22/papers/lightweight-higher-kinded-polymorphism.pdf)
+to generalize over the concurrency libraries.
+
+```ocaml
+(* awsm_ec2_describe_instances.ml *)
+(* The Cfg module is needed to access credentials and other configuration settings. *)
+module Cfg = Awsm_async.Cfg
+
+(* This local module isn't strictly necessary but if you use multiple APIs it will keep
+   API specific functions tidy.
+
+   For the lwt version, you would simply replace "_async" with "_lwt". *)
+module Ec2 = struct
+  module Values = Awsm_ec2_async.Values
+  module Io = Awsm_ec2_async.Io
+
+  let call = Awsm_async.Http.Io.call ~service:Values.service
+end
+
+let ec2_describe_instances ~cfg =
+  (* Call EC2 API "describe-instances", which lists all servers in EC2 *)
+  let%bind response =
+    Ec2.Io.describe_instances
+      (Ec2.call ~cfg)
+      (Ec2.Values.DescribeInstancesRequest.make ())
+  in
+  (* Retrieve 'reservations' from the EC2 result, translating any errors on the way. *)
+  let reservations =
+    match response with
+    | Error (`Transport err) ->
+      let errstr = err |> Awsm.Http.Io.Error.sexp_of_call |> Sexp.to_string_hum in
+      failwithf "Transport error communicating with EC2: %s\n" errstr ()
+    | Error (`AWS aws) ->
+      let errstr = aws |> Ec2.Values.Ec2_error.sexp_of_t |> Sexp.to_string_hum in
+      failwithf "AWS says your query had an error: %s\n" errstr ()
+    | Ok result -> result.reservations
+  in
+  (* Use sexp-expressions to pretty print the instances. *)
+  let () =
+    reservations
+    |> Option.value_exn ~here:[%here]
+    |> List.iter ~f:(fun reservation ->
+      reservation.Ec2.Values.Reservation.instances
+      |> Option.value ~default:[]
+      |> List.iter ~f:(fun instance ->
+        let str = instance |> Ec2.Values.Instance.sexp_of_t |> Sexp.to_string_hum in
+        print_endline str))
+  in
+  return ()
+;;
+
+let main () =
+  let%bind cfg = Awsm_async.Cfg.get_exn () in
+  ec2_describe_instances ~cfg
+;;
+
+let () =
+  let cmd =
+    Command.async
+      ~summary:"List all EC2 instances in a region"
+      (let%map_open.Command () = return () in
+       fun () -> main ())
+  in
+  Command_unix.run cmd
+;;
+```
+
+Make sure to populate your `~/.aws/config` and `~/.aws/credentials` file in the usual way.
+
+Finally, run `dune exec`
+
+```
+dune exec ./awsm_ec2_describe_instances.exe
+```
+
+You should see an s-expression list of all compute instances you have in EC2.
 
 
 ## Documentation
